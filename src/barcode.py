@@ -140,43 +140,30 @@ def plot_barcode_reduction(
     lowest_row_of_col: List[Optional[int]],
     birth_to_death: Dict[int, int],
     *,
-    use_f_values: bool = True,   # True => x = f(σ); False => x = indices (i/j)
+    use_f_values: bool = True,   # True: x = f(σ); False: x = indices i/j
     outfile: Optional[str] = None,
     title: Optional[str] = None,
-    log: bool = False,           # True => xscale='symlog' (handles <=0)
-    min_length: float = 0.0,     # filter finite bars shorter than this (0 = off)
-    relative: bool = False,      # if True, threshold is a fraction of visible span
+    log: bool = False,           # True => log-auto (log10 if x>0 else symlog)
+    min_length: float = 0.0,
+    relative: bool = False,
 ) -> None:
     """
-    Plot a persistence barcode from a reduced boundary matrix.
-
-    Inputs mirror write_barcode(...):
-      - simplices: sorted simplices (each has .dim and .val = f(σ))
-      - lowest_row_of_col: pivot row per column (or None)
-      - birth_to_death: map birth-row i -> death-column j
-
-    X-axis choice:
-      - use_f_values=True  → x = filtration values f(σ) for births/deaths
-      - use_f_values=False → x = indices (i/j) in the sorted filtration
-
-    Display:
-      - Highest dimension on top, H0 at the bottom.
-      - Optional symlog x-scale (true log that supports negatives).
-      - Optional min-length filtering in the display domain (linear or symlog).
+    Plot a barcode from a reduction. Bands ordered top→bottom: highest dim ... → H0.
+    - x uses either filtration values f(σ) or sorted indices, per `use_f_values`.
+    - if log=True: auto-pick log10 (all finite x>0) else symlog (supports <=0).
+    - infinite bars are drawn to the current RIGHT EDGE of the axis (after scaling).
+    - finite bars can be filtered by visible length (absolute or relative).
     """
-    # Build intervals (birth, death) in chosen x domain
+    # ---- Build intervals in chosen x domain (never infer from indices when use_f_values=True) ----
     intervals: List[Interval] = []
     if use_f_values:
-        # paired
         for i, j in birth_to_death.items():
             intervals.append((simplices[i].dim, float(simplices[i].val), float(simplices[j].val)))
-        # essential (no double count)
         used_births = set(birth_to_death.keys())
         for j, l in enumerate(lowest_row_of_col):
             if l is None and j not in used_births:
                 intervals.append((simplices[j].dim, float(simplices[j].val), "inf"))
     else:
-        # indices as x
         for i, j in birth_to_death.items():
             intervals.append((simplices[i].dim, float(i), float(j)))
         used_births = set(birth_to_death.keys())
@@ -184,31 +171,49 @@ def plot_barcode_reduction(
             if l is None and j not in used_births:
                 intervals.append((simplices[j].dim, float(j), "inf"))
 
-    # Sanity: no negative lengths for finite bars
+    # Basic sanity
     for k, b, d in intervals:
         if d != "inf" and float(d) < float(b):
             raise ValueError(f"Death < birth on x-axis: (dim={k}, b={b}, d={d})")
 
-    # Normalize and compute filtering threshold in display domain
-    def disp_x(x: float) -> float:
-        if not log:
-            return x
-        return math.copysign(math.log10(abs(x) + 1.0), x)  # for filtering only; axis uses true symlog
-
-    finite_x: List[float] = []
+    # ---- Normalize + collect finite x ----
     cleaned: List[Tuple[int, float, Optional[float]]] = []
+    finite_x: List[float] = []
     for k, b, d in intervals:
-        k = int(k); b = float(b)
+        b = float(b)
         d_val = None if d == "inf" else float(d)
-        cleaned.append((k, b, d_val))
+        cleaned.append((int(k), b, d_val))
         finite_x.append(b)
         if d_val is not None:
             finite_x.append(d_val)
 
+    # ---- Choose axis transform (log auto) ----
+    use_log10 = False
+    use_symlog = False
+    if log:
+        if finite_x and min(finite_x) > 0.0:
+            use_log10 = True
+        else:
+            use_symlog = True
+    # Helper to measure visible length (for filtering) in the chosen domain
+    def to_display_x(x: float) -> float:
+        if not log:
+            return x
+        if use_log10:
+            # log10 domain length; x must be > 0
+            return math.log10(x)
+        # symlog approximation for filtering (axis uses true symlog)
+        return math.copysign(math.log10(abs(x) + 1.0), x)
+
+    # ---- Filtering (keep ∞) ----
     if min_length > 0.0 and finite_x:
-        xs = [disp_x(v) for v in finite_x]
-        span = max(1e-12, max(xs) - min(xs))
-        thr = (min_length * span) if relative else min_length
+        vals_disp = [to_display_x(v) for v in finite_x if (not use_log10 or v > 0)]
+        if not vals_disp:
+            # if all values invalid for log10 measure (e.g., <=0), skip filtering
+            thr = 0.0
+        else:
+            span_disp = max(1e-12, max(vals_disp) - min(vals_disp))
+            thr = (min_length * span_disp) if relative else min_length
     else:
         thr = 0.0
 
@@ -217,7 +222,11 @@ def plot_barcode_reduction(
         if d is None:
             kept.append((k, b, d))
         else:
-            if (disp_x(d) - disp_x(b)) >= thr:
+            if (not use_log10) or (b > 0 and d > 0):
+                if (to_display_x(d) - to_display_x(b)) >= thr:
+                    kept.append((k, b, d))
+            else:
+                # log10 length undefined for non-positive; keep bar (or pre-shift outside if desired)
                 kept.append((k, b, d))
 
     if not kept:
@@ -228,7 +237,7 @@ def plot_barcode_reduction(
         plt.show()
         return
 
-    # Group by dimension and order vertically: max→…→0 top→bottom
+    # ---- Group by dim; top→bottom = highest→lowest ----
     dims = sorted({k for k, _, _ in kept}, reverse=True)
     per_dim = {k: [] for k in dims}
     for k, b, d in kept:
@@ -236,14 +245,12 @@ def plot_barcode_reduction(
     for k in dims:
         per_dim[k].sort(key=lambda bd: (bd[0], math.inf if bd[1] is None else bd[1]))
 
-    # X-limits from chosen x-values (never from indices unless use_f_values=False)
+    # ---- X limits from chosen x-values (not indices unless use_f_values=False) ----
     all_x = [x for k in dims for (b, d) in per_dim[k] for x in (b, d if d is not None else b)]
     xmin, xmax = min(all_x), max(all_x)
-    xspan = max(1e-12, xmax - xmin)
-    xpad = 0.05 * xspan
-    x_left, x_right = xmin - xpad, xmax + xpad
+    x_left, x_right = xmin, xmax
 
-    # Vertical layout without overlap
+    # ---- Vertical layout: no overlaps ----
     band_gap = 1.2
     band_half = 0.4 * band_gap
     fig_h = max(2.2, len(dims) * (band_gap * 0.9) + 0.6)
@@ -252,7 +259,7 @@ def plot_barcode_reduction(
     for i in range(1, len(dims)):
         ax.axhline(i * band_gap - 0.5 * band_gap, linewidth=0.5, alpha=0.4)
     ax.set_yticks([i * band_gap for i in range(len(dims))])
-    ax.set_yticklabels([f"H {k}" for k in dims])  # top: max dim
+    ax.set_yticklabels([f"H {k}" for k in dims])  # H(max) on top, H0 bottom
 
     lw = 2.0
     for i, k in enumerate(dims):
@@ -267,21 +274,30 @@ def plot_barcode_reduction(
             y_positions = [bot + j * step for j in range(m)]
         for y, (b, d) in zip(y_positions, bars):
             if d is None:
-                ax.plot([b, x_right], [y, y], linewidth=lw, color='darkblue')
+                # draw to data right limit; arrow will be snapped to visible right edge after scaling
+                ax.plot([b, x_right], [y, y], linewidth=lw, color="darkblue")
             else:
-                ax.plot([b, d], [y, y], linewidth=lw, color='darkblue')
+                ax.plot([b, d], [y, y], linewidth=lw, color="darkblue")
 
+    # ---- Set x-scale (real log), then compute visible right boundary and draw arrows to it ----
     ax.set_xlim(x_left, x_right)
     if log:
-        ax.set_xscale("symlog", linthresh=1.0, linscale=1.0)
-        ax.set_xlabel(("f(σ)" if use_f_values else "index") + " (symlog)")
+        if use_log10:
+            ax.set_xscale("log")
+            ax.set_xlabel(("f(σ)" if use_f_values else "index") + " (log10)")
+        else:
+            # tiny linthresh so 0<f<1 est bien en "log" (pas en zone linéaire)
+            ax.set_xscale("symlog", linthresh=1e-9, linscale=1.0)
+            ax.set_xlabel(("f(σ)" if use_f_values else "index") + " (symlog)")
     else:
         ax.set_xlabel("f(σ)" if use_f_values else "index")
     if title:
+        title += " [log scale]" if log else ""
+        title += f" [min length > {min_length}{' (rel)' if relative else ''}]" if min_length > 0 else ""
         ax.set_title(title)
 
-    # Arrowheads for infinite bars at the visible right boundary
-    xr = ax.get_xlim()[1]
+    # snap INF arrows to the visible right boundary (AFTER scale): this makes ∞ == max displayed x
+    xr_visible = ax.get_xlim()[1]  # data coordinate at the right edge (log/ symlog aware)
     for i, k in enumerate(dims):
         base = i * band_gap
         bars = per_dim[k]
@@ -294,8 +310,13 @@ def plot_barcode_reduction(
             y_positions = [bot + j * step for j in range(m)]
         for y, (b, d) in zip(y_positions, bars):
             if d is None:
-                ax.annotate("", xy=(xr, y), xytext=(xr - 0.02 * (x_right - x_left), y),
-                            arrowprops=dict(arrowstyle="->", lw=lw))
+                # small backstep in DATA units to make arrowhead visible within the frame
+                ax.annotate(
+                    "",
+                    xy=(xr_visible, y),
+                    xytext=(xr_visible - 0.02 * (x_right - x_left), y),
+                    arrowprops=dict(arrowstyle="->", lw=lw),
+                )
 
     ax.set_ylim(-0.6 * band_gap, (len(dims) - 1) * band_gap + 0.6 * band_gap)
     ax.spines["right"].set_visible(False)
@@ -304,4 +325,3 @@ def plot_barcode_reduction(
     if outfile:
         fig.savefig(outfile, bbox_inches="tight", dpi=180)
     plt.show()
-
