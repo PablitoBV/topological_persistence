@@ -51,154 +51,6 @@ def write_barcode(
     # for line in lines:
     #     print(line)
 
-def plot_barcode(
-    intervals: List[Interval],
-    title: Optional[str] = None,
-    filename: Optional[str] = None,
-    x_padding: float = 0.05,
-    band_gap: float = 1.2,
-    line_width: float = 2.0,
-    dpi: int = 180,
-):
-    """
-    Plot a barcode diagram on a single Matplotlib axes.
-
-    Parameters
-    ----------
-    intervals : list of (k, birth, death)
-        death can be a float, 'inf', or None meaning infinite bar.
-    title : optional str
-        Title on top of the plot.
-    filename : optional str
-        If provided, save the plot to this path.
-    x_padding : float
-        Fractional padding added on the left/right of the min/max finite x.
-    band_gap : float
-        Vertical spacing between homology bands (H0, H1, H2, ...).
-    line_width : float
-        Width of the barcode line segments.
-    dpi : int
-        Resolution for saving.
-    """
-    if not intervals:
-        fig, ax = plt.subplots(figsize=(8, 2), dpi=dpi)
-        ax.set_axis_off()
-        ax.text(0.5, 0.5, "No intervals", ha="center", va="center", transform=ax.transAxes)
-        if filename:
-            fig.savefig(filename, bbox_inches="tight", dpi=dpi)
-        plt.show()
-        return
-
-    # Normalize and collect
-    cleaned: List[Tuple[int, float, Optional[float]]] = []
-    min_x = math.inf
-    max_x = -math.inf
-    max_dim = 0
-    for k, b, d in intervals:
-        max_dim = max(max_dim, k)
-        if isinstance(d, str) and d.lower() == "inf":
-            d_val = None
-        else:
-            d_val = float(d) if d is not None else None
-        b_val = float(b)
-        cleaned.append((k, b_val, d_val))
-        min_x = min(min_x, b_val)
-        if d_val is not None:
-            max_x = max(max_x, d_val, max_x)
-        else:
-            max_x = max(max_x, b_val, max_x)
-
-    # Compute x-limits with padding
-    x_span = max(1e-6, max_x - min_x)
-    x_pad = x_span * x_padding
-    x_left = min_x - x_pad
-    x_right = max_x + x_pad
-
-    # Prepare y mapping per dimension
-    # Each dim occupies a horizontal band centered at y = k*band_gap,
-    # and within it bars are vertically stacked with a small offset.
-    per_dim: List[List[Tuple[float, Optional[float]]]] = [[] for _ in range(max_dim + 1)]
-    for k, b, d in cleaned:
-        per_dim[k].append((b, d))
-
-    # Sort each band by birth then death for reproducibility
-    for k in range(max_dim + 1):
-        per_dim[k].sort(key=lambda bd: (bd[0], math.inf if bd[1] is None else bd[1]))
-
-    # Determine per-dimension stacking (rows)
-    y_positions: List[List[float]] = []
-    for k in range(max_dim + 1):
-        items = per_dim[k]
-        rows: List[float] = []
-        y_positions.append(rows)
-        # assign vertical slots; simple greedy stacking
-        # spacing within band:
-        inner_step = 0.06 * band_gap
-        base = k * band_gap
-        next_row_index = 0
-        for _ in items:
-            y = base - 0.4 * band_gap + next_row_index * inner_step
-            rows.append(y)
-            next_row_index += 1
-
-    # Plot
-    fig_height = max(2.2, (max_dim + 1) * (band_gap * 0.9) + 0.6)
-    fig, ax = plt.subplots(figsize=(10, fig_height), dpi=dpi)
-
-    # Draw horizontal separators and Y tick labels "H k"
-    for k in range(max_dim + 1):
-        band_center = k * band_gap
-        # horizontal separator below each band except the last
-        if k > 0:
-            ax.axhline(band_center - 0.5 * band_gap, linewidth=0.5, alpha=0.4)
-
-    ax.set_yticks([k * band_gap for k in range(max_dim + 1)])
-    ax.set_yticklabels([f"H {k}" for k in range(max_dim + 1)])
-
-    
-    # Plot bars
-    for k in range(max_dim + 1):
-        items = per_dim[k]
-        rows_y = y_positions[k]
-        # Séparer les barres infinies et finies
-        infinite_bars = [(b, d, idx) for idx, (b, d) in enumerate(items) if d is None]
-        finite_bars = [(b, d, idx) for idx, (b, d) in enumerate(items) if d is not None]
-        # Dessiner d'abord les barres infinies
-        for b, d, idx in infinite_bars:
-            y = rows_y[idx]
-            ax.plot([b, x_right], [y, y], linewidth=line_width)
-            ax.annotate(
-                "",
-                xy=(x_right, y),
-                xytext=(x_right - 0.001 * x_span, y),
-                arrowprops=dict(arrowstyle="->", lw=line_width),
-            )
-        # Puis les barres finies
-        for b, d, idx in finite_bars:
-            y = rows_y[idx]
-            ax.plot([b, d], [y, y], linewidth=line_width)
-
-    # Aesthetics
-    ax.set_xlim(x_left, x_right)
-    ax.set_xlabel("Filtration value")
-    if title:
-        ax.set_title(title)
-
-    # Expand y-lims to avoid clipping arrows
-    ymin = -0.6 * band_gap
-    ymax = max_dim * band_gap + 0.6 * band_gap
-    ax.set_ylim(ymin, ymax)
-
-    # Reduce visual clutter
-    ax.spines["right"].set_visible(False)
-    ax.spines["top"].set_visible(False)
-
-    fig.tight_layout()
-    if filename:
-        fig.savefig(filename, bbox_inches="tight", dpi=dpi)
-    plt.show()
-
-
 # ---- Build intervals from a reduction result (same inputs as write_barcode) ----
 
 def build_intervals(
@@ -283,95 +135,89 @@ def guess_space(betti: Dict[int, int]) -> str:
 
 # ---- Plotting (same spirit as your plot_barcode, adds log-x & min-length) ----
 
-def plot_barcode_from_reduction(
+def plot_barcode_reduction(
     simplices: List[Simplex],
     lowest_row_of_col: List[Optional[int]],
     birth_to_death: Dict[int, int],
-    outfile: str,
     *,
-    title: Optional[str] = None,
-    log_x: bool = False,
-    min_length: float = 0.0,     # if >0, drop finite bars shorter than this (absolute)
-    relative: bool = False,      # if True, treat min_length as fraction of global span
-) -> None:
-    intervals = build_intervals(simplices, lowest_row_of_col, birth_to_death)
-    intervals = filter_by_length(intervals, min_length=min_length, relative=relative)
-    plot_barcode(intervals, outfile=outfile, title=title, log=log_x)
-
-def plot_barcode(
-    intervals: List[Interval],
+    use_f_values: bool = True,   # True => x = f(σ); False => x = indices (i/j)
     outfile: Optional[str] = None,
     title: Optional[str] = None,
-    *,
-    log: bool = False,          # True => xscale='symlog' (gère x < 0)
-    min_length: float = 0.0,    # filtre des barres finies; 0 => pas de filtre
-    relative: bool = False,     # si True, min_length est fraction du span visible
+    log: bool = False,           # True => xscale='symlog' (handles <=0)
+    min_length: float = 0.0,     # filter finite bars shorter than this (0 = off)
+    relative: bool = False,      # if True, threshold is a fraction of visible span
 ) -> None:
     """
-    Trace un barcode persistant avec **dimension max en haut** et H0 en bas.
+    Plot a persistence barcode from a reduced boundary matrix.
 
-    Paramètres
-    ----------
-    intervals : list[(k, b, d|'inf')]
-        (dimension k, naissance b, mort d). Utiliser "inf" pour une barre infinie.
-    outfile : str | None
-        Si fourni, sauvegarde (PNG/SVG/PDF selon l'extension).
-    title : str | None
-        Titre optionnel.
-    log : bool
-        Si True, applique une échelle x 'symlog' (log symétrique, supporte x négatifs).
-    min_length : float
-        Seuil de longueur pour **barres finies** (les 'inf' sont toujours gardées).
-        - Si relative=False : seuil absolu dans l’unité affichée (linéaire ou symlog).
-        - Si relative=True  : seuil = min_length * (étendue visible globale).
-    relative : bool
-        Interprétation relative du seuil si True.
+    Inputs mirror write_barcode(...):
+      - simplices: sorted simplices (each has .dim and .val = f(σ))
+      - lowest_row_of_col: pivot row per column (or None)
+      - birth_to_death: map birth-row i -> death-column j
+
+    X-axis choice:
+      - use_f_values=True  → x = filtration values f(σ) for births/deaths
+      - use_f_values=False → x = indices (i/j) in the sorted filtration
+
+    Display:
+      - Highest dimension on top, H0 at the bottom.
+      - Optional symlog x-scale (true log that supports negatives).
+      - Optional min-length filtering in the display domain (linear or symlog).
     """
-    # Cas trivial
-    if not intervals:
-        fig, ax = plt.subplots(figsize=(8, 2), dpi=160)
-        ax.set_axis_off()
-        ax.text(0.5, 0.5, "No intervals", ha="center", va="center", transform=ax.transAxes)
-        if outfile: fig.savefig(outfile, bbox_inches="tight", dpi=160)
-        plt.show()
-        return
+    # Build intervals (birth, death) in chosen x domain
+    intervals: List[Interval] = []
+    if use_f_values:
+        # paired
+        for i, j in birth_to_death.items():
+            intervals.append((simplices[i].dim, float(simplices[i].val), float(simplices[j].val)))
+        # essential (no double count)
+        used_births = set(birth_to_death.keys())
+        for j, l in enumerate(lowest_row_of_col):
+            if l is None and j not in used_births:
+                intervals.append((simplices[j].dim, float(simplices[j].val), "inf"))
+    else:
+        # indices as x
+        for i, j in birth_to_death.items():
+            intervals.append((simplices[i].dim, float(i), float(j)))
+        used_births = set(birth_to_death.keys())
+        for j, l in enumerate(lowest_row_of_col):
+            if l is None and j not in used_births:
+                intervals.append((simplices[j].dim, float(j), "inf"))
 
-    # Normalisation
-    cleaned: List[Tuple[int, float, Optional[float]]] = []
-    finite_vals: List[float] = []
-    dims_set = set()
+    # Sanity: no negative lengths for finite bars
     for k, b, d in intervals:
-        k = int(k)
-        b = float(b)
-        d_val = None if (isinstance(d, str) and d == "inf") else float(d)
-        cleaned.append((k, b, d_val))
-        dims_set.add(k)
-        finite_vals.append(b)
-        if d_val is not None:
-            finite_vals.append(d_val)
+        if d != "inf" and float(d) < float(b):
+            raise ValueError(f"Death < birth on x-axis: (dim={k}, b={b}, d={d})")
 
-    # Longueur mesurée dans le domaine d'affichage (lin ou symlog)
-    def to_display_x(x: float) -> float:
+    # Normalize and compute filtering threshold in display domain
+    def disp_x(x: float) -> float:
         if not log:
             return x
-        # approx cohérente avec perception en symlog pour le filtrage
-        return math.copysign(math.log10(abs(x) + 1.0), x)
+        return math.copysign(math.log10(abs(x) + 1.0), x)  # for filtering only; axis uses true symlog
 
-    # Seuil
-    if min_length > 0.0 and finite_vals:
-        xs_disp = [to_display_x(v) for v in finite_vals]
-        span_disp = max(1e-12, max(xs_disp) - min(xs_disp))
-        thr = (min_length * span_disp) if relative else min_length
+    finite_x: List[float] = []
+    cleaned: List[Tuple[int, float, Optional[float]]] = []
+    for k, b, d in intervals:
+        k = int(k); b = float(b)
+        d_val = None if d == "inf" else float(d)
+        cleaned.append((k, b, d_val))
+        finite_x.append(b)
+        if d_val is not None:
+            finite_x.append(d_val)
+
+    if min_length > 0.0 and finite_x:
+        xs = [disp_x(v) for v in finite_x]
+        span = max(1e-12, max(xs) - min(xs))
+        thr = (min_length * span) if relative else min_length
     else:
         thr = 0.0
 
-    # Filtrage
     kept: List[Tuple[int, float, Optional[float]]] = []
     for k, b, d in cleaned:
         if d is None:
-            kept.append((k, b, d))  # garder les infinies
+            kept.append((k, b, d))
         else:
-            if (to_display_x(d) - to_display_x(b)) >= thr:
+            if (disp_x(d) - disp_x(b)) >= thr:
                 kept.append((k, b, d))
 
     if not kept:
@@ -382,36 +228,34 @@ def plot_barcode(
         plt.show()
         return
 
-    # Groupement par dimension et **ordre vertical: max→...→0**
-    dims = sorted({k for k, _, _ in kept}, reverse=True)  # max en premier (haut)
+    # Group by dimension and order vertically: max→…→0 top→bottom
+    dims = sorted({k for k, _, _ in kept}, reverse=True)
     per_dim = {k: [] for k in dims}
     for k, b, d in kept:
         per_dim[k].append((b, d))
     for k in dims:
         per_dim[k].sort(key=lambda bd: (bd[0], math.inf if bd[1] is None else bd[1]))
 
-    # x-lims en domaine linéaire (puis on appliquera symlog si demandé)
-    all_finite = [x for k in dims for (b, d) in per_dim[k] for x in (b, d if d is not None else b)]
-    x_min, x_max = min(all_finite), max(all_finite)
-    x_span = max(1e-12, x_max - x_min)
-    x_pad = 0.01 * x_span
-    x_left, x_right = x_min - x_pad, x_max + x_pad
+    # X-limits from chosen x-values (never from indices unless use_f_values=False)
+    all_x = [x for k in dims for (b, d) in per_dim[k] for x in (b, d if d is not None else b)]
+    xmin, xmax = min(all_x), max(all_x)
+    xspan = max(1e-12, xmax - xmin)
+    xpad = 0.05 * xspan
+    x_left, x_right = xmin - xpad, xmax + xpad
 
-    # Layout vertical sans chevauchement: chaque bande a une fenêtre ±0.4*gap
-    band_gap = 1.05
+    # Vertical layout without overlap
+    band_gap = 1.2
     band_half = 0.4 * band_gap
     fig_h = max(2.2, len(dims) * (band_gap * 0.9) + 0.6)
     fig, ax = plt.subplots(figsize=(10, fig_h), dpi=180)
 
-    # séparateurs + ticks (de haut en bas: k = dims[0] … dims[-1])
     for i in range(1, len(dims)):
         ax.axhline(i * band_gap - 0.5 * band_gap, linewidth=0.5, alpha=0.4)
     ax.set_yticks([i * band_gap for i in range(len(dims))])
-    ax.set_yticklabels([f"H {k}" for k in dims])
+    ax.set_yticklabels([f"H {k}" for k in dims])  # top: max dim
 
-    # tracer
     lw = 2.0
-    for i, k in enumerate(dims):  # i=0 en haut = dim max
+    for i, k in enumerate(dims):
         base = i * band_gap
         bars = per_dim[k]
         m = len(bars)
@@ -423,19 +267,20 @@ def plot_barcode(
             y_positions = [bot + j * step for j in range(m)]
         for y, (b, d) in zip(y_positions, bars):
             if d is None:
-                ax.plot([b, x_right], [y, y], linewidth=lw, color="darkblue")
+                ax.plot([b, x_right], [y, y], linewidth=lw, color='darkblue')
             else:
-                ax.plot([b, d], [y, y], linewidth=lw, color="darkblue")
+                ax.plot([b, d], [y, y], linewidth=lw, color='darkblue')
 
-    # échelle x
     ax.set_xlim(x_left, x_right)
-    ax.set_xlabel("Filtration (symlog)" if log else "Filtration")
     if log:
         ax.set_xscale("symlog", linthresh=1.0, linscale=1.0)
+        ax.set_xlabel(("f(σ)" if use_f_values else "index") + " (symlog)")
+    else:
+        ax.set_xlabel("f(σ)" if use_f_values else "index")
     if title:
         ax.set_title(title)
 
-    # flèches des 'inf' vers la borne droite visible
+    # Arrowheads for infinite bars at the visible right boundary
     xr = ax.get_xlim()[1]
     for i, k in enumerate(dims):
         base = i * band_gap
@@ -459,3 +304,4 @@ def plot_barcode(
     if outfile:
         fig.savefig(outfile, bbox_inches="tight", dpi=180)
     plt.show()
+
