@@ -1,7 +1,7 @@
-# boundary.py
+# boundary.py (sparse: store only ones)
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 from filtration import Filtration, Simplex
 
 def _faces(verts: Tuple[int, ...]) -> List[Tuple[int, ...]]:
@@ -10,7 +10,7 @@ def _faces(verts: Tuple[int, ...]) -> List[Tuple[int, ...]]:
 @dataclass
 class Boundary:
     simplices: List[Simplex]
-    matrix: List[List[int]]  # 0/1
+    columns: Dict[int, Set[int]]  # col j -> set of row indices i where B[i,j] == 1
 
     @property
     def size(self) -> int:
@@ -19,37 +19,57 @@ class Boundary:
     @classmethod
     def from_filtration(cls, filtration: Filtration, *, strict: bool = True) -> "Boundary":
         ordered = filtration.sort_by_filtration(in_place=False)
-        n = len(ordered)
-        mat = [[0] * n for _ in range(n)]
         index_of = {s.vert: i for i, s in enumerate(ordered)}
+        cols: Dict[int, Set[int]] = {}
+
         for col, simplex in enumerate(ordered):
             if simplex.dim == 0:
                 continue
+            rows: Set[int] = set()
             for face in _faces(simplex.vert):
                 row = index_of.get(face)
                 if row is None:
                     if strict:
                         raise ValueError(f"Missing face {face} of {simplex.vert}")
                     continue
-                mat[row][col] = 1
-        return cls(ordered, mat)
+                rows.add(row)
+            if rows:
+                cols[col] = rows
+        return cls(ordered, cols)
 
+    # Impression dense (pour debug) sans matérialiser toute la matrice
     def print(self) -> None:
-        for row in self.matrix:
-            print(" ".join("1" if v else "0" for v in row))
+        n = self.size
+        for i in range(n):
+            line_bits = []
+            for j in range(n):
+                line_bits.append("1" if i in self.columns.get(j, ()) else "0")
+            print(" ".join(line_bits))
 
+    # helpers pour l'élimination sur Z2
     def lowest_one(self, col: int) -> Optional[int]:
-        for row in range(self.size - 1, -1, -1):
-            if self.matrix[row][col] == 1:
-                return row
-        return None
+        s = self.columns.get(col)
+        return max(s) if s else None
 
     def add_column(self, dst_col: int, src_col: int) -> None:
-        for row in range(self.size):
-            self.matrix[row][dst_col] ^= self.matrix[row][src_col]
+        if dst_col == src_col:
+            return
+        s_dst = self.columns.get(dst_col, set())
+        s_src = self.columns.get(src_col, set())
+        if not s_dst:
+            if s_src:
+                self.columns[dst_col] = set(s_src)  # copy
+            return
+        # XOR = symmetric difference
+        s_dst ^= s_src
+        if s_dst:
+            self.columns[dst_col] = s_dst
+        elif dst_col in self.columns:
+            del self.columns[dst_col]
 
     def column_rows(self, col: int) -> List[int]:
-        return [row for row in range(self.size) if self.matrix[row][col] == 1]
+        s = self.columns.get(col)
+        return sorted(s) if s else []
 
     def copy(self) -> "Boundary":
-        return Boundary(self.simplices[:], [r[:] for r in self.matrix])
+        return Boundary(self.simplices[:], {c: set(r) for c, r in self.columns.items()})
