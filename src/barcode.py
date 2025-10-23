@@ -3,12 +3,10 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Tuple, Union
 
 import math
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt # type: ignore
 
-from matplotlib.collections import LineCollection
+from matplotlib.collections import LineCollection # type: ignore
 from filtration import Simplex
-
-
 
 # A barcode interval is (dimension, birth_x, death_x or "inf")
 Interval = Tuple[int, float, Union[float, str]]
@@ -158,7 +156,8 @@ def guess_space(betti: Dict[int, int]) -> str:
 # Plotting
 # ----------------------------------------------------------------------
 
-# small helpers --------------------------------------------------------
+
+# -------------------------- helpers --------------------------
 
 def _build_intervals_raw(
     simplices: List[Simplex],
@@ -166,8 +165,12 @@ def _build_intervals_raw(
     birth_to_death: Dict[int, int],
     use_f_values: bool,
 ) -> List[Tuple[int, float, Union[float, str]]]:
-    """Return (dim, x_birth, x_death|'inf') using f-values or indices."""
+    """
+    Build (dim, x_birth, x_death|'inf') from the reduction.
+    x is either filtration value or index depending on use_f_values.
+    """
     out: List[Tuple[int, float, Union[float, str]]] = []
+
     if use_f_values:
         for i, j in birth_to_death.items():
             out.append((simplices[i].dim, float(simplices[i].val), float(simplices[j].val)))
@@ -182,45 +185,49 @@ def _build_intervals_raw(
         for j, low in enumerate(lowest_row_of_col):
             if low is None and j not in used:
                 out.append((simplices[j].dim, float(j), "inf"))
+
     for k, b, d in out:
         if d != "inf" and float(d) < float(b):
             raise ValueError(f"death < birth: dim={k}, b={b}, d={d}")
+
     return out
 
 
 def _make_x_transformers(x_mode: str):
     """
-    Return two callables:
-      to_plot(x): value used for plotting coords
-      to_filter(x): value used to measure lengths for filtering
+    Return (to_plot, to_filter) callables.
+
+    to_plot(x): x used to plot coordinates and set xlim in the displayed domain.
+    to_filter(x): x used to measure lengths for filtering in that same domain.
     """
-    m = x_mode.lower()
-    if m not in {"linear", "symlog", "log_values"}:
+    mode = x_mode.lower()
+    if mode not in {"linear", "symlog", "log_values"}:
         raise ValueError("x_mode must be 'linear', 'symlog', or 'log_values'.")
 
-    if m == "linear":
+    if mode == "linear":
         return (lambda x: x, lambda x: x)
 
-    if m == "symlog":
-        # Axis will be set to symlog. For filtering we use a cheap monotone map.
+    if mode == "symlog":
+        # Plot with raw values; axis will be symlog.
+        # For filtering we use a simple monotone map.
         def to_filter(x: float) -> float:
             return math.copysign(math.log10(abs(x) + 1.0), x)
         return (lambda x: x, to_filter)
 
-    # log_values: plot log10(x) on a linear axis
+    # mode == "log_values": plot log10(x) on a linear axis
     def to_plot(x: float) -> float:
         if x < 0:
             raise ValueError("log_values requires all finite x > 0.")
-        
         if x == 0:
-            # raise ValueError("log_values requires all finite x > 0.")
-            x = 1e-12  # small positive value to avoid -inf
+            return 1e-12
         return math.log10(x)
     return (to_plot, to_plot)
 
 
 def _stack_y_positions(n: int, center: float, band_half: float) -> List[float]:
-    """Return n y positions evenly spaced in [center-band_half, center+band_half]."""
+    """
+    Evenly space n y-positions inside [center - band_half, center + band_half].
+    """
     if n <= 1:
         return [center]
     lo, hi = center - band_half, center + band_half
@@ -228,7 +235,7 @@ def _stack_y_positions(n: int, center: float, band_half: float) -> List[float]:
     return [lo + i * step for i in range(n)]
 
 
-# plotting -------------------------------------------------------------
+# ----------------------------- plotting -----------------------------
 
 def plot_barcode_reduction(
     simplices: List[Simplex],
@@ -244,34 +251,37 @@ def plot_barcode_reduction(
 ) -> None:
     """
     Plot barcode from a reduced boundary.
-    - Highest dimension at top, H0 at bottom.
-    - X uses filtration values or indices (use_f_values).
-    - X scaling:
-        * linear: raw values
-        * symlog: real symmetric log axis (supports x <= 0)
-        * log_values: plot log10(x) on a linear axis (requires x > 0)
-    - Infinite bars reach the visible right edge.
-    - Filtering is applied in the displayed domain.
+
+    Layout:
+      - Highest dimension at top, H0 at bottom.
+      - X is either filtration values or indices.
+      - X scaling:
+          * linear: raw values
+          * symlog: real symmetric log axis (works with x <= 0)
+          * log_values: plot log10(x) on a linear axis (requires x > 0)
+      - Infinite bars end at the visible right bound in the displayed domain.
+      - Filtering happens in that same displayed domain.
     """
-    # Build raw intervals on chosen x domain
+    # Build raw intervals in chosen x domain
     raw = _build_intervals_raw(simplices, lowest_row_of_col, birth_to_death, use_f_values)
 
-    # Make x transformers
+    # Prepare x transforms
     to_plot, to_filter = _make_x_transformers(x_mode)
 
-    # Convert to display domain for plotting and for computing limits
+    # Convert to displayed domain for plotting and limits
     disp_intervals: List[Tuple[int, float, Optional[float]]] = []
-    samples: List[float] = []
+    disp_samples: List[float] = []
     dims_set = set()
+
     for k, b, d in raw:
         xb = to_plot(float(b))
         if d == "inf":
             disp_intervals.append((int(k), xb, None))
-            samples.append(xb)
+            disp_samples.append(xb)
         else:
             xd = to_plot(float(d))
             disp_intervals.append((int(k), xb, xd))
-            samples.extend([xb, xd])
+            disp_samples.extend([xb, xd])
         dims_set.add(int(k))
 
     if not disp_intervals:
@@ -283,9 +293,9 @@ def plot_barcode_reduction(
         plt.show()
         return
 
-    # Filtering threshold in display domain
-    if min_length > 0.0 and samples:
-        span = max(1e-12, max(samples) - min(samples))
+    # Compute filter threshold in displayed domain
+    if min_length > 0.0 and disp_samples:
+        span = max(1e-12, max(disp_samples) - min(disp_samples))
         thr = (min_length * span) if relative else min_length
     else:
         thr = 0.0
@@ -296,9 +306,10 @@ def plot_barcode_reduction(
         if xd is None:
             kept.append((k, xb, None))
         else:
-            # ensure left->right after transform
             left, right = (xb, xd) if xb <= xd else (xd, xb)
-            if (to_filter(right) - to_filter(left)) >= thr if x_mode == "symlog" else (right - left) >= thr:
+            # For symlog the visible distance is measured by to_filter
+            length = (to_filter(right) - to_filter(left)) if x_mode == "symlog" else (right - left)
+            if length >= thr:
                 kept.append((k, left, right))
 
     if not kept:
@@ -310,7 +321,7 @@ def plot_barcode_reduction(
         plt.show()
         return
 
-    # Group by dim; order bands: max dim on top
+    # Group by dimension; draw top to bottom from highest to lowest
     dims = sorted({k for k, _, _ in kept}, reverse=True)
     per_dim: Dict[int, List[Tuple[float, Optional[float]]]] = {k: [] for k in dims}
     for k, xb, xd in kept:
@@ -318,7 +329,7 @@ def plot_barcode_reduction(
     for k in dims:
         per_dim[k].sort(key=lambda bd: (bd[0], float("inf") if bd[1] is None else bd[1]))
 
-    # X limits in display domain
+    # X limits in displayed domain (this fixes the "inf uses max f instead of max log f" bug)
     xs = [x for k in dims for (b, d) in per_dim[k] for x in (b, d if d is not None else b)]
     xmin, xmax = min(xs), max(xs)
     xspan = max(1e-12, xmax - xmin)
@@ -331,48 +342,53 @@ def plot_barcode_reduction(
     fig_h = max(2.2, len(dims) * (band_gap * 0.9) + 0.6)
     fig, ax = plt.subplots(figsize=(10, fig_h), dpi=180)
 
-    # Y layout
+    # Y layout and labels
     for i in range(1, len(dims)):
         ax.axhline(i * band_gap - 0.5 * band_gap, linewidth=0.5, alpha=0.3)
     ax.set_yticks([i * band_gap for i in range(len(dims))])
     ax.set_yticklabels([f"H {k}" for k in dims])
 
-    # Build segments per band and draw with LineCollection
+    # Build line segments per band
     finite_segs: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
     inf_segs: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
 
+    x_right = to_plot(x_right)
+    
     for band_idx, k in enumerate(dims):
         base = band_idx * band_gap
         bars = per_dim[k]
-        bars.reverse()
-        ys = _stack_y_positions(len(bars), base, band_half)
-        for (y, (b, d)) in zip(ys, bars):
+        # reverse for nicer stacking (latest on top inside the band)
+        bars_rev = list(reversed(bars))
+        ys = _stack_y_positions(len(bars_rev), base, band_half)
+        for y, (b, d) in zip(ys, bars_rev):
             if d is None:
                 inf_segs.append(((b, y), (x_right, y)))
             else:
                 finite_segs.append(((b, y), (d, y)))
 
+    # Draw in batches
     if finite_segs:
-        ax.add_collection(LineCollection(finite_segs, linewidths=2.0, colors="darkblue"))
-
+        ax.add_collection(LineCollection(finite_segs, linewidths=2.0, colors='darkblue'))
     if inf_segs:
         ax.add_collection(LineCollection(inf_segs, linewidths=2.0))
-        # Arrowheads at right edge (cheap but clear)
+        # Arrowheads at the visible right bound of the displayed domain
         for (_, y0), _ in inf_segs:
             ax.annotate(
-                "", 
-                xy=(x_right, y0), 
+                "",
+                xy=(x_right, y0),
                 xytext=(x_right - 0.02 * (x_right - x_left), y0),
-                arrowprops=dict(arrowstyle="->", lw=2.0)
+                arrowprops=dict(arrowstyle="->", lw=2.0),
             )
 
-    # X axis
+    # X axis config
     ax.set_xlim(x_left, x_right)
     if x_mode == "symlog":
+        # Values were not pre-transformed; axis does the transform.
         ax.set_xscale("symlog", linthresh=1e-9, linscale=1.0)
         xlabel = "f(.)" if use_f_values else "index"
         xlabel += " (symlog)"
     elif x_mode == "log_values":
+        # Values already mapped to log10; keep a linear axis.
         xlabel = "log10 f(.)" if use_f_values else "log10 index"
     else:
         xlabel = "f(.)" if use_f_values else "index"
@@ -380,11 +396,12 @@ def plot_barcode_reduction(
     if title:
         ax.set_title(title)
 
-    # Final cosmetics
+    # Final layout
     ax.set_ylim(-0.6 * band_gap, (len(dims) - 1) * band_gap + 0.6 * band_gap)
     ax.spines["right"].set_visible(False)
     ax.spines["top"].set_visible(False)
     fig.tight_layout()
+
     if outfile:
         fig.savefig(outfile, bbox_inches="tight", dpi=180)
     plt.show()
