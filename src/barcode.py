@@ -47,12 +47,9 @@ def write_barcode(
         for line in lines:
             f.write(line + "\n")
 
-    print("\n=== Barcode ===")
-    for line in lines:
-        print(line)
-
-
-
+    # print("\n=== Barcode ===")
+    # for line in lines:
+    #     print(line)
 
 def plot_barcode(
     intervals: List[Interval],
@@ -299,131 +296,166 @@ def plot_barcode_from_reduction(
 ) -> None:
     intervals = build_intervals(simplices, lowest_row_of_col, birth_to_death)
     intervals = filter_by_length(intervals, min_length=min_length, relative=relative)
-    _plot_barcode(intervals, filename=outfile, title=title, log_x=log_x)
+    plot_barcode(intervals, outfile=outfile, title=title, log=log_x)
 
-def _plot_barcode(
+def plot_barcode(
     intervals: List[Interval],
+    outfile: Optional[str] = None,
     title: Optional[str] = None,
-    filename: Optional[str] = None,
-    x_padding: float = 0.05,
-    band_gap: float = 1.2,
-    line_width: float = 2.0,
-    dpi: int = 180,
-    log_x: bool = False,
-    # --- nouveau ---
-    min_length: float = 0.0,      # 0 => pas de filtre
-    relative: bool = False,       # si True, min_length est une fraction du span
-    filter_in_log: bool = False,  # si True, applique le filtre après pseudo-log
-):
-    """Trace un barcode; supporte pseudo-log (valeurs négatives) et filtrage par longueur minimale."""
+    *,
+    log: bool = False,          # True => xscale='symlog' (gère x < 0)
+    min_length: float = 0.0,    # filtre des barres finies; 0 => pas de filtre
+    relative: bool = False,     # si True, min_length est fraction du span visible
+) -> None:
+    """
+    Trace un barcode persistant avec **dimension max en haut** et H0 en bas.
+
+    Paramètres
+    ----------
+    intervals : list[(k, b, d|'inf')]
+        (dimension k, naissance b, mort d). Utiliser "inf" pour une barre infinie.
+    outfile : str | None
+        Si fourni, sauvegarde (PNG/SVG/PDF selon l'extension).
+    title : str | None
+        Titre optionnel.
+    log : bool
+        Si True, applique une échelle x 'symlog' (log symétrique, supporte x négatifs).
+    min_length : float
+        Seuil de longueur pour **barres finies** (les 'inf' sont toujours gardées).
+        - Si relative=False : seuil absolu dans l’unité affichée (linéaire ou symlog).
+        - Si relative=True  : seuil = min_length * (étendue visible globale).
+    relative : bool
+        Interprétation relative du seuil si True.
+    """
+    # Cas trivial
     if not intervals:
-        fig, ax = plt.subplots(figsize=(8, 2), dpi=dpi)
+        fig, ax = plt.subplots(figsize=(8, 2), dpi=160)
         ax.set_axis_off()
         ax.text(0.5, 0.5, "No intervals", ha="center", va="center", transform=ax.transAxes)
-        if filename: fig.savefig(filename, bbox_inches="tight", dpi=dpi)
+        if outfile: fig.savefig(outfile, bbox_inches="tight", dpi=160)
         plt.show()
         return
 
-    def pseudo_log(x: float) -> float:
+    # Normalisation
+    cleaned: List[Tuple[int, float, Optional[float]]] = []
+    finite_vals: List[float] = []
+    dims_set = set()
+    for k, b, d in intervals:
+        k = int(k)
+        b = float(b)
+        d_val = None if (isinstance(d, str) and d == "inf") else float(d)
+        cleaned.append((k, b, d_val))
+        dims_set.add(k)
+        finite_vals.append(b)
+        if d_val is not None:
+            finite_vals.append(d_val)
+
+    # Longueur mesurée dans le domaine d'affichage (lin ou symlog)
+    def to_display_x(x: float) -> float:
+        if not log:
+            return x
+        # approx cohérente avec perception en symlog pour le filtrage
         return math.copysign(math.log10(abs(x) + 1.0), x)
 
-    # ---- normalisation initiale (linéaire) ----
-    clean_lin: List[Tuple[int, float, Optional[float]]] = []
-    min_x_lin, max_x_lin, max_dim = math.inf, -math.inf, 0
-    for k, b, d in intervals:
-        max_dim = max(max_dim, k)
-        b_lin = float(b)
-        d_lin = None if (isinstance(d, str) and d.lower() == "inf") else float(d)
-        clean_lin.append((k, b_lin, d_lin))
-        min_x_lin = min(min_x_lin, b_lin)
-        max_x_lin = max(max_x_lin, b_lin if d_lin is None else d_lin)
-
-    # ---- filtrage longueur (linéaire ou pseudo-log) ----
-    def _filter(items: List[Tuple[int, float, Optional[float]]],
-                use_log: bool) -> List[Tuple[int, float, Optional[float]]]:
-        if min_length <= 0:
-            return items
-        # calcule le span pour seuil relatif
-        vals = []
-        for _, b, d in items:
-            xb = pseudo_log(b) if use_log else b
-            vals.append(xb)
-            if d is not None:
-                xd = pseudo_log(d) if use_log else d
-                vals.append(xd)
-        if not vals:
-            return items
-        span = max(1e-12, max(vals) - min(vals))
-        thr = (min_length * span) if relative else min_length
-        out = []
-        for k, b, d in items:
-            if d is None:
-                out.append((k, b, d))          # garde les bars infinies
-            else:
-                xb = pseudo_log(b) if use_log else b
-                xd = pseudo_log(d) if use_log else d
-                if (xd - xb) >= thr:
-                    out.append((k, b, d))     # conserve valeurs originales
-        return out
-
-    filtered_lin = _filter(clean_lin, use_log=filter_in_log)
-
-    # ---- appliquer pseudo-log pour l'affichage si demandé ----
-    if log_x:
-        clean = [(k, pseudo_log(b), None if d is None else pseudo_log(d)) for k, b, d in filtered_lin]
-        min_x = min(pseudo_log(min_x_lin), *(x for _, x, _ in clean))
-        max_x = max(pseudo_log(max_x_lin), *(x for _, x, _ in clean))
+    # Seuil
+    if min_length > 0.0 and finite_vals:
+        xs_disp = [to_display_x(v) for v in finite_vals]
+        span_disp = max(1e-12, max(xs_disp) - min(xs_disp))
+        thr = (min_length * span_disp) if relative else min_length
     else:
-        clean = filtered_lin
-        min_x, max_x = min_x_lin, max_x_lin
+        thr = 0.0
 
-    # padding
-    x_span = max(1e-12, max_x - min_x)
-    x_pad = x_span * x_padding
-    x_left, x_right = min_x - x_pad, max_x + x_pad
+    # Filtrage
+    kept: List[Tuple[int, float, Optional[float]]] = []
+    for k, b, d in cleaned:
+        if d is None:
+            kept.append((k, b, d))  # garder les infinies
+        else:
+            if (to_display_x(d) - to_display_x(b)) >= thr:
+                kept.append((k, b, d))
 
-    # regrouper par dimension
-    per_dim: List[List[Tuple[float, Optional[float]]]] = [[] for _ in range(max_dim + 1)]
-    for k, b, d in clean:
+    if not kept:
+        fig, ax = plt.subplots(figsize=(8, 2), dpi=160)
+        ax.set_axis_off()
+        ax.text(0.5, 0.5, "All bars filtered out", ha="center", va="center", transform=ax.transAxes)
+        if outfile: fig.savefig(outfile, bbox_inches="tight", dpi=160)
+        plt.show()
+        return
+
+    # Groupement par dimension et **ordre vertical: max→...→0**
+    dims = sorted({k for k, _, _ in kept}, reverse=True)  # max en premier (haut)
+    per_dim = {k: [] for k in dims}
+    for k, b, d in kept:
         per_dim[k].append((b, d))
-    for k in range(max_dim + 1):
+    for k in dims:
         per_dim[k].sort(key=lambda bd: (bd[0], math.inf if bd[1] is None else bd[1]))
 
-    # positions verticales
-    y_positions: List[List[float]] = []
-    for k in range(max_dim + 1):
-        rows, base, inner_step = [], k * band_gap, 0.06 * band_gap
-        for i in range(len(per_dim[k])):
-            rows.append(base - 0.4 * band_gap + i * inner_step)
-        y_positions.append(rows)
+    # x-lims en domaine linéaire (puis on appliquera symlog si demandé)
+    all_finite = [x for k in dims for (b, d) in per_dim[k] for x in (b, d if d is not None else b)]
+    x_min, x_max = min(all_finite), max(all_finite)
+    x_span = max(1e-12, x_max - x_min)
+    x_pad = 0.01 * x_span
+    x_left, x_right = x_min - x_pad, x_max + x_pad
 
-    # plot
-    fig_h = max(2.2, (max_dim + 1) * (band_gap * 0.9) + 0.6)
-    fig, ax = plt.subplots(figsize=(10, fig_h), dpi=dpi)
+    # Layout vertical sans chevauchement: chaque bande a une fenêtre ±0.4*gap
+    band_gap = 1.05
+    band_half = 0.4 * band_gap
+    fig_h = max(2.2, len(dims) * (band_gap * 0.9) + 0.6)
+    fig, ax = plt.subplots(figsize=(10, fig_h), dpi=180)
 
-    for k in range(1, max_dim + 1):
-        ax.axhline(k * band_gap - 0.5 * band_gap, linewidth=0.5, alpha=0.4)
-    ax.set_yticks([k * band_gap for k in range(max_dim + 1)])
-    ax.set_yticklabels([f"H {k}" for k in range(max_dim + 1)])
+    # séparateurs + ticks (de haut en bas: k = dims[0] … dims[-1])
+    for i in range(1, len(dims)):
+        ax.axhline(i * band_gap - 0.5 * band_gap, linewidth=0.5, alpha=0.4)
+    ax.set_yticks([i * band_gap for i in range(len(dims))])
+    ax.set_yticklabels([f"H {k}" for k in dims])
 
-    for k in range(max_dim + 1):
-        for idx, (b, d) in enumerate(per_dim[k]):
-            y = y_positions[k][idx]
+    # tracer
+    lw = 2.0
+    for i, k in enumerate(dims):  # i=0 en haut = dim max
+        base = i * band_gap
+        bars = per_dim[k]
+        m = len(bars)
+        if m == 1:
+            y_positions = [base]
+        else:
+            top, bot = base + band_half, base - band_half
+            step = (top - bot) / (m - 1)
+            y_positions = [bot + j * step for j in range(m)]
+        for y, (b, d) in zip(y_positions, bars):
             if d is None:
-                ax.plot([b, x_right], [y, y], linewidth=line_width)
-                ax.annotate("", xy=(x_right, y), xytext=(x_right - 0.002 * x_span, y),
-                            arrowprops=dict(arrowstyle="->", lw=line_width))
+                ax.plot([b, x_right], [y, y], linewidth=lw, color="darkblue")
             else:
-                ax.plot([b, d], [y, y], linewidth=line_width)
+                ax.plot([b, d], [y, y], linewidth=lw, color="darkblue")
 
+    # échelle x
     ax.set_xlim(x_left, x_right)
-    ax.set_xlabel("Filtration index (pseudo-log)" if log_x else "Filtration index")
+    ax.set_xlabel("Filtration (symlog)" if log else "Filtration")
+    if log:
+        ax.set_xscale("symlog", linthresh=1.0, linscale=1.0)
     if title:
         ax.set_title(title)
-    ax.set_ylim(-0.6 * band_gap, max_dim * band_gap + 0.6 * band_gap)
+
+    # flèches des 'inf' vers la borne droite visible
+    xr = ax.get_xlim()[1]
+    for i, k in enumerate(dims):
+        base = i * band_gap
+        bars = per_dim[k]
+        m = len(bars)
+        if m == 1:
+            y_positions = [base]
+        else:
+            top, bot = base + band_half, base - band_half
+            step = (top - bot) / (m - 1)
+            y_positions = [bot + j * step for j in range(m)]
+        for y, (b, d) in zip(y_positions, bars):
+            if d is None:
+                ax.annotate("", xy=(xr, y), xytext=(xr - 0.02 * (x_right - x_left), y),
+                            arrowprops=dict(arrowstyle="->", lw=lw))
+
+    ax.set_ylim(-0.6 * band_gap, (len(dims) - 1) * band_gap + 0.6 * band_gap)
     ax.spines["right"].set_visible(False)
     ax.spines["top"].set_visible(False)
     fig.tight_layout()
-    if filename:
-        fig.savefig(filename, bbox_inches="tight", dpi=dpi)
+    if outfile:
+        fig.savefig(outfile, bbox_inches="tight", dpi=180)
     plt.show()
