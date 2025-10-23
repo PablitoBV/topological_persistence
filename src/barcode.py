@@ -123,34 +123,6 @@ def betti_from_intervals(intervals: List[Interval]) -> Dict[int, int]:
     return betti
 
 
-def guess_space(betti: Dict[int, int]) -> str:
-    """
-    Heuristic space guess from low-dimensional Betti numbers.
-    """
-    b0 = betti.get(0, 0)
-    b1 = betti.get(1, 0)
-    b2 = betti.get(2, 0)
-
-    if b0 == 0:
-        return "empty set"
-    if b0 > 1 and b1 == 0 and b2 == 0:
-        return f"{b0} disjoint contractible components"
-    if b0 == 1 and b1 == 0 and b2 == 0:
-        return "contractible"
-    if b0 == 1 and b1 == 1 and b2 == 0:
-        return "circle-like (S1)"
-    if b0 == 1 and b1 == 0 and b2 == 1:
-        return "sphere-like (S2)"
-    if b0 == 1 and b1 == 2 and b2 == 1:
-        return "torus (T2)"
-    if b0 == 1 and b2 == 1 and b1 % 2 == 0 and b1 >= 4:
-        g = b1 // 2
-        return f"closed orientable surface of genus {g}"
-    if b0 == 1 and b1 > 0 and b2 == 0:
-        return f"one component with {b1} independent 1-cycles"
-    return f"undetermined: b0={b0}, b1={b1}, b2={b2}"
-
-
 # ----------------------------------------------------------------------
 # Plotting
 # ----------------------------------------------------------------------
