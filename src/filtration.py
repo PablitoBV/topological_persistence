@@ -68,7 +68,7 @@ class Filtration:
                 # Re-check after deduplication: duplicates in a line are not allowed
                 if len(verts) != (dim + 1):
                     raise ValueError(
-                        f"{path}:{lineno}: vertex duplication detected; need exactly {dim+1} distinct IDs"
+                        f"{path}:{lineno}: vertex duplication detected; need exactly {dim+1} distinct IDs (got {len(verts)})"
                     )
 
                 simplices.append(Simplex(val=val, dim=dim, vert=verts))
