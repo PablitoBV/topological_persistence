@@ -1,3 +1,5 @@
+Course link: [Topological Data Analysis](https://www.enseignement.polytechnique.fr/informatique/INF556/)
+
 We provide code to read filtrations. You can download it either in C++ or in Java. You can otherwise reproduce it in any other language of your choice.
 
 This code assumes that the filtration is given in an ASCII file with the following format, where each line represents a simplex sigma and is of the form:
